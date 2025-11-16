@@ -10,8 +10,7 @@ describe("Liquidation", function () {
         method: "hardhat_reset",
         params: [{
           forking: {
-            jsonRpcUrl: "https://eth-mainnet.g.alchemy.com/v2/2oKyeSVR7cFDGvczR6XaO",
-            // jsonRpcUrl:  "https://rpc.ankr.com/eth/c4425c97b8f4bae07a185638ec727d4e903bf910c480eb0283d82efcd85ca76a",
+            jsonRpcUrl: process.env.ALCHE_API,
             blockNumber: 12489619,
           },
         }]
@@ -22,12 +21,10 @@ describe("Liquidation", function () {
     const accounts = await ethers.getSigners();
     const liquidator = accounts[0].address;
 
-    const beforeLiquidationBalance = BigNumber.from(await network.provider.request({
+    const beforeLiquidationBalance = BigNumber.from(await hre.network.provider.request({
         method: "eth_getBalance",
         params: [liquidator],
     }));
-
-    console.log("Balance (ETH):", utils.formatEther(beforeLiquidationBalance));
 
     const LiquidationOperator = await ethers.getContractFactory("LiquidationOperator");
     const liquidationOperator = await LiquidationOperator.deploy(overrides = {gasPrice: gasPrice});

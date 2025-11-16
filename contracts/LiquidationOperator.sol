@@ -2,6 +2,7 @@
 pragma solidity ^0.8.7;
 
 import "hardhat/console.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 // ----------------------INTERFACE------------------------------
 
@@ -53,26 +54,26 @@ interface ILendingPool {
 
 // UniswapV2
 
-// https://github.com/Uniswap/v2-core/blob/master/contracts/interfaces/IERC20.sol
-// https://docs.uniswap.org/protocol/V2/reference/smart-contracts/Pair-ERC-20
-interface IERC20 {
-    // Returns the account balance of another account with address _owner.
-    function balanceOf(address owner) external view returns (uint256);
+// // https://github.com/Uniswap/v2-core/blob/master/contracts/interfaces/IERC20.sol
+// // https://docs.uniswap.org/protocol/V2/reference/smart-contracts/Pair-ERC-20
+// interface IERC20 {
+//     // Returns the account balance of another account with address _owner.
+//     function balanceOf(address owner) external view returns (uint256);
 
-    /**
-     * Allows _spender to withdraw from your account multiple times, up to the _value amount.
-     * If this function is called again it overwrites the current allowance with _value.
-     * Lets msg.sender set their allowance for a spender.
-     **/
-    function approve(address spender, uint256 value) external; // return type is deleted to be compatible with USDT
+//     /**
+//      * Allows _spender to withdraw from your account multiple times, up to the _value amount.
+//      * If this function is called again it overwrites the current allowance with _value.
+//      * Lets msg.sender set their allowance for a spender.
+//      **/
+//     function approve(address spender, uint256 value) external; // return type is deleted to be compatible with USDT
 
-    /**
-     * Transfers _value amount of tokens to address _to, and MUST fire the Transfer event.
-     * The function SHOULD throw if the message caller’s account balance does not have enough tokens to spend.
-     * Lets msg.sender send pool tokens to an address.
-     **/
-    function transfer(address to, uint256 value) external returns (bool);
-}
+//     /**
+//      * Transfers _value amount of tokens to address _to, and MUST fire the Transfer event.
+//      * The function SHOULD throw if the message caller’s account balance does not have enough tokens to spend.
+//      * Lets msg.sender send pool tokens to an address.
+//      **/
+//     function transfer(address to, uint256 value) external returns (bool);
+// }
 
 // https://github.com/Uniswap/v2-periphery/blob/master/contracts/interfaces/IWETH.sol
 interface IWETH is IERC20 {
@@ -136,6 +137,8 @@ interface IUniswapV2Pair {
 // ----------------------IMPLEMENTATION------------------------------
 
 contract LiquidationOperator is IUniswapV2Callee {
+    using SafeERC20 for IERC20;
+
     uint8 public constant health_factor_decimals = 18;
 
     // TODO: define constants used in the contract including ERC-20 tokens, Uniswap Pairs, Aave lending pools, etc. */
@@ -152,10 +155,12 @@ contract LiquidationOperator is IUniswapV2Callee {
     address USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
     address WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address WBTC = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
+    address USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     // Target user address and variable
     address target_user = 0x59CE4a2AC5bC3f5F225439B2993b86B42f6d3e9F;
     uint256 debt_to_cover = 2916378221684;
+    // uint256 debt_to_cover = 2016378221684;
     uint256 profit_weth = 0;
 
     uint256 expected_health_factor = 10 ** health_factor_decimals;
@@ -224,9 +229,6 @@ contract LiquidationOperator is IUniswapV2Callee {
         //    *** Your code here ***
         // check whether the user's health factor is below 1
         (,,,,,uint256 health_factor) = i_lending_pool.getUserAccountData(target_user);
-        console.log("Health factor just before liquidation:", health_factor);
-        console.log("Expected health factor:", expected_health_factor);
-        console.log("Is liquidatable?", health_factor < expected_health_factor);
         require(health_factor < expected_health_factor, "The target address is not liquidatable");
 
         // 2. call flash swap to liquidate the target user
@@ -235,33 +237,99 @@ contract LiquidationOperator is IUniswapV2Callee {
         // we should borrow USDT, liquidate the target user and get the WBTC, then swap WBTC to repay uniswap
         // (please feel free to develop other workflows as long as they liquidate the target user successfully)
         //    *** Your code here ***
-        address weth_usdt = uniswap_factory.getPair(WETH, USDT);
-        IUniswapV2Pair weth_usdt_pair = IUniswapV2Pair(weth_usdt);
-        address token0 = weth_usdt_pair.token0();
-        address token1 = weth_usdt_pair.token1();
+        address usdc_usdt = uniswap_factory.getPair(USDC, USDT);
+        IUniswapV2Pair usdc_usdt_pair = IUniswapV2Pair(usdc_usdt);
+        address token0 = usdc_usdt_pair.token0();
 
-        if(token0 == WETH) {
-            weth_usdt_pair.swap(debt_to_cover, 0, address(this), bytes("flash loan"));
+        // call the flash loan here with data size != 0
+        if(token0 == USDC) {
+            usdc_usdt_pair.swap(0, debt_to_cover, address(this), bytes("flash loan"));
         } else {
-            weth_usdt_pair.swap(0, debt_to_cover, address(this), bytes("flash loan"));
+            usdc_usdt_pair.swap(debt_to_cover, 0, address(this), bytes("flash loan"));
         }
 
         // 3. Convert the profit into ETH and send back to sender
         //    *** Your code here ***
         // The remaining WBTC is the profit
-        uint256 wbtc_bal = IERC20(WBTC).balanceOf(address(this));
+        uint256 weth_bal = IERC20(WETH).balanceOf(address(this));
 
         // withdraw the WETH to ETH
-        IWETH(WETH).withdraw(wbtc_bal);
+        IWETH(WETH).withdraw(weth_bal);
 
         // Ensure the contract has enough ETH as required
-        require(address(this).balance >= wbtc_bal, "Not enough ETH");
+        require(address(this).balance >= weth_bal, "Not enough ETH");
 
         // Send ETH to the caller/owner
-        (bool success, ) = msg.sender.call{value: wbtc_bal}("");
+        (bool success, ) = msg.sender.call{value: weth_bal}("");
         require(success, "ETH transfer failed");
 
         // END TODO
+    }
+
+    // swap WBTC->WETH->USDT
+    function swap_weth_usdt (uint256 amount_owed, uint256 wbtc_bal) internal {
+        // get the pair to do the swap
+        // swap WBTC->WETH
+        address wbtc_weth = uniswap_factory.getPair(WBTC, WETH);
+        IUniswapV2Pair wbtc_weth_pair = IUniswapV2Pair(wbtc_weth);
+        uint256 wbtc_weth_pair_wbtc_reserve = 0;
+        uint256 wbtc_weth_pair_weth_reserve = 0;
+
+        if(wbtc_weth_pair.token0() == WBTC) {
+            (wbtc_weth_pair_wbtc_reserve, wbtc_weth_pair_weth_reserve,) = wbtc_weth_pair.getReserves();
+        } else {
+            (wbtc_weth_pair_weth_reserve, wbtc_weth_pair_wbtc_reserve,) = wbtc_weth_pair.getReserves();
+        }
+
+        // calculate how much WETH we get back
+        uint256 weth_to_recv = getAmountOut(wbtc_bal, wbtc_weth_pair_wbtc_reserve, wbtc_weth_pair_weth_reserve);
+
+        // transfer WBTC to the swap pool
+        IERC20(WBTC).safeTransfer(wbtc_weth, wbtc_bal);
+
+        // swap all WBTC to WETH
+        if(wbtc_weth_pair.token0() == WBTC) {
+            wbtc_weth_pair.swap(0, weth_to_recv, address(this), bytes(""));
+        } else {
+            wbtc_weth_pair.swap(weth_to_recv, 0, address(this), bytes(""));
+        }
+
+        console.log();
+        console.log("WETH reserve: ", wbtc_weth_pair_weth_reserve/10**18);
+        console.log("WBTC reserve: ", wbtc_weth_pair_wbtc_reserve/10**8);
+        console.log("WETH receive: ", weth_to_recv/10**18);
+        console.log();
+
+        // start swapping the WETH to USDT (amount_owed)
+        address weth_usdt = uniswap_factory.getPair(WETH, USDT);
+        IUniswapV2Pair weth_usdt_pair = IUniswapV2Pair(weth_usdt);
+        uint256 weth_usdt_pair_weth_reserve = 0;
+        uint256 weth_usdt_pair_usdt_reserve = 0;
+        
+        // calculate how much WETH we need to swap to the USDT amount_owed 
+        if(weth_usdt_pair.token0() == WETH) {
+            (weth_usdt_pair_weth_reserve, weth_usdt_pair_usdt_reserve,) = weth_usdt_pair.getReserves();
+        } else {
+            (weth_usdt_pair_usdt_reserve, weth_usdt_pair_weth_reserve,) = weth_usdt_pair.getReserves();
+        }
+
+        // calculate weth to swap
+        uint256 weth_to_swap = getAmountIn(amount_owed, weth_usdt_pair_weth_reserve, weth_usdt_pair_usdt_reserve);
+
+        // transfer WETH to the swap pool
+        IERC20(WETH).safeTransfer(weth_usdt, weth_to_swap);
+
+        // swap WETH->USDT
+        if(weth_usdt_pair.token0() == WETH) {
+            weth_usdt_pair.swap(0, amount_owed, address(this), bytes(""));
+        } else {
+           weth_usdt_pair.swap(amount_owed, 0, address(this), bytes(""));
+        }
+
+        console.log();
+        console.log("WETH reserve: ", weth_usdt_pair_weth_reserve/(10**18));
+        console.log("USDT reserve: ", weth_usdt_pair_usdt_reserve/(10**8));
+        console.log();
     }
 
     // required by the swap
@@ -280,7 +348,7 @@ contract LiquidationOperator is IUniswapV2Callee {
         // 2.1 liquidate the target user
         //    *** Your code here ***
         // approve the lending pool to get token from this address
-        IERC20(USDT).approve(address(i_lending_pool), debt_to_cover);
+        IERC20(USDT).safeApprove(address(i_lending_pool), debt_to_cover);
 
         // call liquidation function
         i_lending_pool.liquidationCall(
@@ -295,38 +363,18 @@ contract LiquidationOperator is IUniswapV2Callee {
         //    *** Your code here ***
         // calculate the amount owed (flash loan amount + 0.3%)
         uint256 amount_owed = debt_to_cover + (debt_to_cover * 3 / 997 + 1);
+        console.log("Amount (USDT) Owed: ", amount_owed/10**8);
 
-        // get the pair to do the swap
-        address wbtc_usdt = uniswap_factory.getPair(WBTC, USDT);
-        IUniswapV2Pair wbtc_usdt_pair = IUniswapV2Pair(wbtc_usdt);
-
-        // get the reserve of the pair pool
-        (uint256 reserve0, uint256 reserve1, uint32 blockTimestampLast) = wbtc_usdt_pair.getReserves();
-        uint256 wbtc_reserve = 0;
-        uint256 usdt_reserve = 0;
-
-        if(wbtc_usdt_pair.token0() == WBTC) {
-            wbtc_reserve = reserve0;
-            usdt_reserve = reserve1;
-        } else {
-            wbtc_reserve = reserve1;
-            usdt_reserve = reserve0;
-        }
-
-        // calculate how much we should swap to get the amount to return
-        uint256 token_to_swap = getAmountIn(amount_owed, wbtc_reserve, usdt_reserve);
-
-        // do the swapping
-        if(wbtc_usdt_pair.token0() == WBTC) {
-            wbtc_usdt_pair.swap(token_to_swap, 0, address(this), bytes(""));
-        } else {
-            wbtc_usdt_pair.swap(0, token_to_swap, address(this), bytes(""));
-        }
+        // get how much WBTC collateral we claimed
+        uint256 wbtc_bal = IERC20(WBTC).balanceOf(address(this));
+        console.log("Collateral (WBTC) claimed: ", wbtc_bal/10**8);
+        require(wbtc_bal > 0, "The balance of WBTC is below 0.");
+        swap_weth_usdt(amount_owed, wbtc_bal);
 
         // 2.3 repay
         //    *** Your code here ***
         // repay the flash loan
-        IERC20(USDT).transfer(msg.sender, amount_owed);
+        IERC20(USDT).safeTransfer(msg.sender, amount_owed);
         
         // END TODO
     }

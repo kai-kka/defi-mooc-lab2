@@ -29,3 +29,12 @@ flash loan return 8905424008 (WBTC) -> swap to 1477402720015790673349 (WETH) -> 
 
 
 In summary, the error arises because Hardhat v2.6.1 is too old to handle modern Ethereum node responses missing the totalDifficulty field. Upgrading Hardhat to version 2.22.14 or above will automatically include a fallback for missing totalDifficulty, resolving this issue. After upgrading, your hardhat_reset forking call should work without the JSON-RPC schema error.
+
+311.18 USDT -> 1 WBTC (2916378221684)
+1 WBTC -> 16.46 WETH
+
+311.13 USDT -> 1 WBTC (2016378221684)
+1 WBTC -> 16.26 WETH
+
+Uniswap WBTC/USDC pool: 42/14685
+Uniswap WBTC/USDT pool: 2/730
