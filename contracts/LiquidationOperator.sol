@@ -159,8 +159,12 @@ contract LiquidationOperator is IUniswapV2Callee {
 
     // Target user address and variable
     address target_user = 0x59CE4a2AC5bC3f5F225439B2993b86B42f6d3e9F;
-    uint256 debt_to_cover = 2916378221684;
-    // uint256 debt_to_cover = 2016378221684;
+    // uint256 debt_to_cover = 2916378221684;
+    // uint256 debt_to_cover = 2500000000000;
+    // uint256 debt_to_cover = 2000000000000; 
+    uint256 debt_to_cover = 1555555555555; // this will get higher profit (40 ETH)
+    // uint256 debt_to_cover = 1000000000000;
+    
     uint256 profit_weth = 0;
 
     uint256 expected_health_factor = 10 ** health_factor_decimals;
