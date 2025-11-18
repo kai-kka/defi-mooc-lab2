@@ -156,16 +156,27 @@ contract LiquidationOperator is IUniswapV2Callee {
     address WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address WBTC = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
     address USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+    address DAI  = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+    address WISE = 0x66a0f676479Cee1d7373f3DC2e2952778BfF5bd6;
+    address PEPE = 0x6982508145454Ce325dDbE47a25d4ec3d2311933;
+    address PAXG = 0x45804880De22913dAFE09f4980848ECE6EcbAf78;
 
     // Target user address and variable
     address target_user = 0x59CE4a2AC5bC3f5F225439B2993b86B42f6d3e9F;
     // uint256 debt_to_cover = 2916378221684;
+    // uint256 minus = 1003000000000;
+    // uint256 wbtc_minus = 100000000;
     // uint256 debt_to_cover = 2500000000000;
-    // uint256 debt_to_cover = 2000000000000; 
-    uint256 debt_to_cover = 1555555555555; // this will get higher profit (40 ETH)
-    // uint256 debt_to_cover = 1000000000000;
+
+    // uint256 debt_to_cover = 2000000000000; // this will get higher profit (49 ETH)
+    // uint256 minus = 730000000000; // this will get higher profit (49 ETH)
+
+    uint256 debt_to_cover = 2100000000000;
+    uint256 minus = 773000000000;
+    uint256 wbtc_minus = 150000000;
     
-    uint256 profit_weth = 0;
+    // uint256 debt_to_cover = 1555555555555; // 
+    // uint256 debt_to_cover =     600000000000;
 
     uint256 expected_health_factor = 10 ** health_factor_decimals;
     // END TODO
@@ -241,15 +252,49 @@ contract LiquidationOperator is IUniswapV2Callee {
         // we should borrow USDT, liquidate the target user and get the WBTC, then swap WBTC to repay uniswap
         // (please feel free to develop other workflows as long as they liquidate the target user successfully)
         //    *** Your code here ***
-        address usdc_usdt = uniswap_factory.getPair(USDC, USDT);
-        IUniswapV2Pair usdc_usdt_pair = IUniswapV2Pair(usdc_usdt);
-        address token0 = usdc_usdt_pair.token0();
+        // dfs to find the route that maximise the profit
+        address[] memory avail_token = new address[](4);
+        avail_token[0] = USDC;
+        avail_token[1] = USDT;
+        avail_token[2] = WBTC;
+        avail_token[3] = DAI;
+        address[] memory best_route = new address[](0);
+
+        PathInput memory input;
+        input.target_token_in = WBTC;
+        input.token_in = WETH;
+        input.token_out = WETH;
+        input.amount_out = 46494577153933038343;
+        input.cur_route = best_route;
+        input.avail_token = avail_token;
+        
+        (address[] memory final_route, uint256 final_amount_in) = calculate_best_path(input);
+        
+        console.log("best_amount_in: ", final_amount_in);
+        console.log("best_path: ");
+        for (uint i=0; i<final_route.length; i++) {
+            if (final_route[i] == USDC) {
+                console.log("USDC");
+            } else if (final_route[i] == USDT) {
+                console.log("USDT");
+            } else if (final_route[i] == DAI) {
+                console.log("DAI");
+            } else if (final_route[i] == WETH) {
+                console.log("WETH");
+            } else if (final_route[i] == WBTC) {
+                console.log("WBTC");
+            }
+        }
+
+        address dai_usdt = uniswap_factory.getPair(DAI, USDT);
+        IUniswapV2Pair dai_usdt_pair = IUniswapV2Pair(dai_usdt);
+        address token0 = dai_usdt_pair.token0();
 
         // call the flash loan here with data size != 0
-        if(token0 == USDC) {
-            usdc_usdt_pair.swap(0, debt_to_cover, address(this), bytes("flash loan"));
+        if(token0 == USDT) {
+            dai_usdt_pair.swap(debt_to_cover, 0, address(this), bytes("flash loan"));
         } else {
-            usdc_usdt_pair.swap(debt_to_cover, 0, address(this), bytes("flash loan"));
+            dai_usdt_pair.swap(0, debt_to_cover, address(this), bytes("flash loan"));
         }
 
         // 3. Convert the profit into ETH and send back to sender
@@ -270,70 +315,189 @@ contract LiquidationOperator is IUniswapV2Callee {
         // END TODO
     }
 
+    struct PathInput {
+        address target_token_in;
+        address token_in;
+        address token_out;
+        uint256 amount_out;
+        address[] cur_route;
+        address[] avail_token;
+    }
+
+    // find the minimum amount in by given the amount out and a list of token that can be swapped
+    function calculate_best_path(PathInput memory input) internal view returns (address[] memory, uint256) {
+        uint256 new_amount_in;
+
+        if(input.token_in != input.token_out) {
+            // if this is call by this function itself, calculate the amount in for current swap pair
+            new_amount_in = get_swap_in(input.amount_out, input.token_in, input.token_out);
+
+            // if the token in is the target token, stop here
+            if(input.token_in == input.target_token_in) {
+                return (input.cur_route, new_amount_in);
+            }
+        } else {
+            // if this is called from the main contract, continue
+            new_amount_in = input.amount_out;
+        }
+
+        address[] memory best_route;
+        uint256 best_amount_in = 0;
+
+        // start dfs, select a token from the available token list and compute the amount in require
+        for(uint i = 0; i < input.avail_token.length; i++) {
+            // new route
+            address[] memory new_route = new address[](input.cur_route.length + 1);
+            for(uint j = 0; j < input.cur_route.length; j++) {
+                new_route[j] = input.cur_route[j];
+            }
+            new_route[input.cur_route.length] = input.avail_token[i];
+
+            // new available token array
+            address[] memory new_avail_token = new address[](input.avail_token.length - 1);
+            uint idx = 0;
+            for(uint j = 0; j < input.avail_token.length; j++) {
+                if(j != i){
+                    new_avail_token[idx] = input.avail_token[j];
+                    idx++;
+                }
+            }
+
+            // recursive call
+            PathInput memory nextInput = PathInput(
+                input.target_token_in,
+                input.avail_token[i],
+                input.token_in,
+                new_amount_in,
+                new_route,
+                new_avail_token
+            );
+
+            (address[] memory cur_best_route, uint256 cur_best_amount_in) = calculate_best_path(nextInput);
+
+            // update the route and min amount in
+            if((best_amount_in == 0 && cur_best_amount_in > 0) || (cur_best_amount_in > 0 && cur_best_amount_in < best_amount_in)){
+                best_route = cur_best_route;
+                best_amount_in = cur_best_amount_in;
+                console.log(cur_best_amount_in);
+                console.log("best_path: ");
+                for (uint k=0; k<best_route.length; k++) {
+                    if (best_route[k] == USDC) {
+                        console.log("USDC");
+                    } else if (best_route[k] == USDT) {
+                        console.log("USDT");
+                    } else if (best_route[k] == DAI) {
+                        console.log("DAI");
+                    } else if (best_route[k] == WETH) {
+                        console.log("WETH");
+                    } else if (best_route[k] == WBTC) {
+                        console.log("WBTC");
+                    }
+                }
+                console.log();
+            }
+        }
+
+        // return the best route
+        return (best_route, best_amount_in);
+    }
+
+    function get_swap_in(uint256 amount_out, address token_in, address token_out) internal view returns (uint256) {
+        address token_in_out = uniswap_factory.getPair(token_in, token_out);
+        IUniswapV2Pair pair = IUniswapV2Pair(token_in_out);
+        uint256 token_in_reserve = 0;
+        uint256 token_out_reserve = 0;
+        uint256 amount_in = 0;
+
+        // get token reserve
+        if(pair.token0() == token_in) {
+            (token_in_reserve, token_out_reserve,) = pair.getReserves();
+        } else {
+            (token_out_reserve, token_in_reserve,) = pair.getReserves();
+        }
+        
+        // if there is not enough token, return 0
+        if(token_out_reserve < amount_out) {
+            return amount_in;
+        }
+
+        // calculate the amount_out
+        if(amount_out > 0) {
+            amount_in = getAmountIn(amount_out, token_in_reserve, token_out_reserve);
+        }
+
+        return amount_in;
+    }
+
+    function get_swap_out(uint256 amount_in, address token_in, address token_out) internal view returns (uint256 amount_out) {
+        address token_in_out = uniswap_factory.getPair(token_in, token_out);
+        IUniswapV2Pair pair = IUniswapV2Pair(token_in_out);
+        uint256 token_in_reserve = 0;
+        uint256 token_out_reserve = 0;
+        uint256 amount_out = 0;
+
+        // get token reserve
+        if(pair.token0() == token_in) {
+            (token_in_reserve, token_out_reserve,) = pair.getReserves();
+        } else {
+            (token_out_reserve, token_in_reserve,) = pair.getReserves();
+        }
+
+        // calculate the amount_out
+        if(amount_in > 0) {
+            amount_out = getAmountOut(amount_in, token_in_reserve, token_out_reserve);
+        }
+
+        return amount_out;
+    }
+
+    function swap_pair (address token_in, address token_out, uint256 amount_in, uint256 amount_out) internal {
+        address token_in_token_out = uniswap_factory.getPair(token_in, token_out);
+        IUniswapV2Pair pair = IUniswapV2Pair(token_in_token_out);
+
+        // transfer token_in to the swap pool
+        IERC20(token_in).safeTransfer(token_in_token_out, amount_in);
+
+        // swap
+        if(pair.token0() == token_out) {
+            pair.swap(amount_out, 0, address(this), bytes(""));
+        } else {
+           pair.swap(0, amount_out, address(this), bytes(""));
+        }
+    }
+
     // swap WBTC->WETH->USDT
     function swap_weth_usdt (uint256 amount_owed, uint256 wbtc_bal) internal {
         // get the pair to do the swap
         // swap WBTC->WETH
-        address wbtc_weth = uniswap_factory.getPair(WBTC, WETH);
-        IUniswapV2Pair wbtc_weth_pair = IUniswapV2Pair(wbtc_weth);
-        uint256 wbtc_weth_pair_wbtc_reserve = 0;
-        uint256 wbtc_weth_pair_weth_reserve = 0;
+        uint256 weth_swap0 = wbtc_bal - wbtc_minus;
+        uint256 weth_to_recv = get_swap_out(weth_swap0, WBTC, WETH);
+        swap_pair(WBTC, WETH, weth_swap0, weth_to_recv);
 
-        if(wbtc_weth_pair.token0() == WBTC) {
-            (wbtc_weth_pair_wbtc_reserve, wbtc_weth_pair_weth_reserve,) = wbtc_weth_pair.getReserves();
-        } else {
-            (wbtc_weth_pair_weth_reserve, wbtc_weth_pair_wbtc_reserve,) = wbtc_weth_pair.getReserves();
-        }
+        uint256 weth_swap1 = wbtc_minus;
+        uint256 usdc_to_recv = get_swap_out(weth_swap1, WBTC, USDC);
+        swap_pair(WBTC, USDC, weth_swap1, usdc_to_recv);
+        uint256 dai_to_recv = get_swap_out(usdc_to_recv, USDC, DAI);
+        swap_pair(USDC, DAI, usdc_to_recv, dai_to_recv);
+        weth_to_recv = get_swap_out(dai_to_recv, DAI, WETH);
+        swap_pair(DAI, WETH, dai_to_recv, weth_to_recv);
 
-        // calculate how much WETH we get back
-        uint256 weth_to_recv = getAmountOut(wbtc_bal, wbtc_weth_pair_wbtc_reserve, wbtc_weth_pair_weth_reserve);
 
-        // transfer WBTC to the swap pool
-        IERC20(WBTC).safeTransfer(wbtc_weth, wbtc_bal);
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-        // swap all WBTC to WETH
-        if(wbtc_weth_pair.token0() == WBTC) {
-            wbtc_weth_pair.swap(0, weth_to_recv, address(this), bytes(""));
-        } else {
-            wbtc_weth_pair.swap(weth_to_recv, 0, address(this), bytes(""));
-        }
-
-        console.log();
-        console.log("WETH reserve: ", wbtc_weth_pair_weth_reserve/10**18);
-        console.log("WBTC reserve: ", wbtc_weth_pair_wbtc_reserve/10**8);
-        console.log("WETH receive: ", weth_to_recv/10**18);
-        console.log();
-
-        // start swapping the WETH to USDT (amount_owed)
-        address weth_usdt = uniswap_factory.getPair(WETH, USDT);
-        IUniswapV2Pair weth_usdt_pair = IUniswapV2Pair(weth_usdt);
-        uint256 weth_usdt_pair_weth_reserve = 0;
-        uint256 weth_usdt_pair_usdt_reserve = 0;
+        // start swapping the WETH to USDT 
+        uint256 swap0 = amount_owed - minus;
+        uint256 weth_to_swap = get_swap_in(swap0, WETH, USDT);
+        swap_pair(WETH, USDT, weth_to_swap, swap0);
         
-        // calculate how much WETH we need to swap to the USDT amount_owed 
-        if(weth_usdt_pair.token0() == WETH) {
-            (weth_usdt_pair_weth_reserve, weth_usdt_pair_usdt_reserve,) = weth_usdt_pair.getReserves();
-        } else {
-            (weth_usdt_pair_usdt_reserve, weth_usdt_pair_weth_reserve,) = weth_usdt_pair.getReserves();
-        }
+        // start swapping the WETH -> USDC -> USDT
+        uint256 swap1 = amount_owed - swap0;
+        uint256 usdc_to_swap = get_swap_in(swap1, USDC, USDT);
+        weth_to_swap = get_swap_in(usdc_to_swap, WETH, USDC);
+        swap_pair(WETH, USDC, weth_to_swap, usdc_to_swap);
+        swap_pair(USDC, USDT, usdc_to_swap, swap1);
 
-        // calculate weth to swap
-        uint256 weth_to_swap = getAmountIn(amount_owed, weth_usdt_pair_weth_reserve, weth_usdt_pair_usdt_reserve);
-
-        // transfer WETH to the swap pool
-        IERC20(WETH).safeTransfer(weth_usdt, weth_to_swap);
-
-        // swap WETH->USDT
-        if(weth_usdt_pair.token0() == WETH) {
-            weth_usdt_pair.swap(0, amount_owed, address(this), bytes(""));
-        } else {
-           weth_usdt_pair.swap(amount_owed, 0, address(this), bytes(""));
-        }
-
-        console.log();
-        console.log("WETH reserve: ", weth_usdt_pair_weth_reserve/(10**18));
-        console.log("USDT reserve: ", weth_usdt_pair_usdt_reserve/(10**8));
-        console.log();
+        console.log("WETH needed: ", weth_to_swap);
     }
 
     // required by the swap
@@ -367,6 +531,7 @@ contract LiquidationOperator is IUniswapV2Callee {
         //    *** Your code here ***
         // calculate the amount owed (flash loan amount + 0.3%)
         uint256 amount_owed = debt_to_cover + (debt_to_cover * 3 / 997 + 1);
+        console.log("Amount (USDT) Owed: ", amount_owed);
         console.log("Amount (USDT) Owed: ", amount_owed/10**8);
 
         // get how much WBTC collateral we claimed
