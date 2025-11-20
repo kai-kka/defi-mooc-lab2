@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: Unlicense
-pragma solidity ^0.8.7;
+pragma solidity ^0.8.17;
 
 import "hardhat/console.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -150,6 +150,7 @@ contract LiquidationOperator is IUniswapV2Callee {
     ILendingPool public i_lending_pool = ILendingPool(0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9);
     // The Uniswap factory
     IUniswapV2Factory public uniswap_factory = IUniswapV2Factory(0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f);
+    
 
     // Tokens used in this liquidation
     address USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
@@ -163,7 +164,9 @@ contract LiquidationOperator is IUniswapV2Callee {
 
     // Target user address and variable
     address target_user = 0x59CE4a2AC5bC3f5F225439B2993b86B42f6d3e9F;
-    // uint256 debt_to_cover = 2916378221684;
+    uint256 debt_to_cover = 2916378221684;
+    uint256 minus = debt_to_cover-1761171047310;
+
     // uint256 minus = 1003000000000;
     // uint256 wbtc_minus = 100000000;
     // uint256 debt_to_cover = 2500000000000;
@@ -171,12 +174,16 @@ contract LiquidationOperator is IUniswapV2Callee {
     // uint256 debt_to_cover = 2000000000000; // this will get higher profit (49 ETH)
     // uint256 minus = 730000000000; // this will get higher profit (49 ETH)
 
-    uint256 debt_to_cover = 2100000000000;
-    uint256 minus = 773000000000;
-    uint256 wbtc_minus = 150000000;
+    // uint256 debt_to_cover = 2100000000000;
+    // uint256 minus = 773000000000;
+    // uint256 wbtc_minus = 150000000;
     
     // uint256 debt_to_cover = 1555555555555; // 
     // uint256 debt_to_cover =     600000000000;
+    address[][] pairs;
+    uint256[][] reserve_changes;
+    address[][] best_routes;
+    uint256[] best_amounts;
 
     uint256 expected_health_factor = 10 ** health_factor_decimals;
     // END TODO
@@ -254,41 +261,52 @@ contract LiquidationOperator is IUniswapV2Callee {
         //    *** Your code here ***
         // dfs to find the route that maximise the profit
         address[] memory avail_token = new address[](4);
-        avail_token[0] = USDC;
-        avail_token[1] = USDT;
+        avail_token[0] = WETH;
+        avail_token[1] = USDC;
         avail_token[2] = WBTC;
         avail_token[3] = DAI;
+        // avail_token[4] = PEPE;
+        // avail_token[4] = WISE;
+        // avail_token[3] = PAXG;
         address[] memory best_route = new address[](0);
 
-        PathInput memory input;
-        input.target_token_in = WBTC;
-        input.token_in = WETH;
-        input.token_out = WETH;
-        input.amount_out = 46494577153933038343;
-        input.cur_route = best_route;
-        input.avail_token = avail_token;
-        
-        (address[] memory final_route, uint256 final_amount_in) = calculate_best_path(input);
-        
-        console.log("best_amount_in: ", final_amount_in);
-        console.log("best_path: ");
-        for (uint i=0; i<final_route.length; i++) {
-            if (final_route[i] == USDC) {
-                console.log("USDC");
-            } else if (final_route[i] == USDT) {
-                console.log("USDT");
-            } else if (final_route[i] == DAI) {
-                console.log("DAI");
-            } else if (final_route[i] == WETH) {
-                console.log("WETH");
-            } else if (final_route[i] == WBTC) {
-                console.log("WBTC");
-            }
+        uint256 total = 0;
+        address token_in_sim = USDT;
+        address target_token_sim = WETH;
+        uint256 amount_sim =   2925153682733;
+        uint256 increase_sim =  300000000000;
+        bool is_reverse = true;
+
+        // calculate best routes to convert WBTC to USDT
+        simulate(avail_token, token_in_sim, target_token_sim, amount_sim, increase_sim, is_reverse);
+        for (uint i=0; i<best_routes.length; i++) {
+            string memory route_str = convert_route_to_string(token_in_sim, best_routes[i], is_reverse);
+            console.log(route_str);
+            console.log(best_amounts[i]);
+            total += best_amounts[i];
+            console.log();
         }
+
+        console.log("Total: ", total);
+        console.log();
+
+
+        console.log("DAI needed: ", get_swap_in(debt_to_cover, DAI, USDT, false));
+        console.log("WETH needed: ", get_swap_in(2925153682733, WETH, USDT, false));
+        console.log("USDC needed: ", get_swap_in(debt_to_cover, USDC, USDT, false));
+        console.log("WBTC needed: ", get_swap_in(debt_to_cover, WBTC, USDT, false));
 
         address dai_usdt = uniswap_factory.getPair(DAI, USDT);
         IUniswapV2Pair dai_usdt_pair = IUniswapV2Pair(dai_usdt);
         address token0 = dai_usdt_pair.token0();
+        uint256 token_in_reserve = 0;
+        uint256 token_out_reserve = 0;
+
+        if(token0 == DAI) {
+            (token_in_reserve, token_out_reserve,) = dai_usdt_pair.getReserves();
+        } else {
+            (token_out_reserve, token_in_reserve,) = dai_usdt_pair.getReserves();
+        }
 
         // call the flash loan here with data size != 0
         if(token0 == USDT) {
@@ -315,94 +333,336 @@ contract LiquidationOperator is IUniswapV2Callee {
         // END TODO
     }
 
+    // match address to token name
+    function match_address_name_str (address token) internal view returns (string memory) {
+        if(token == WBTC) {
+            return "WBTC";
+        } else if(token == WETH) {
+            return "WETH";
+        } else if(token == USDT) {
+            return "USDT";
+        } else if(token == USDC) {
+            return "USDC";
+        } else if(token == DAI) {
+            return "DAI";
+        } else if(token == PAXG) {
+            return "PAXG";
+        }
+
+        return "None";
+    }
+
+    // printing the routes
+    function convert_route_to_string(address token_start, address[] memory route, bool is_reverse) internal view returns (string memory) {
+        string memory route_str;
+        
+        if (is_reverse) {
+            for (uint i=route.length; i>0; i--){
+                route_str = string.concat(route_str, match_address_name_str(route[i-1]));
+                route_str = string.concat(route_str, "->");
+            }
+
+            route_str = string.concat(route_str, match_address_name_str(token_start));
+
+        } else {
+            route_str = match_address_name_str(token_start);
+
+            for (uint i=0; i<route.length; i++){
+                route_str = string.concat(route_str, "->");
+                route_str = string.concat(route_str, match_address_name_str(route[i]));
+            }
+        }
+        
+        return route_str;
+    }
+
+    // check whether 2 array is identical
+    function array_is_same (address[] memory arr_0, address[] memory arr_1) internal view returns (bool) {
+        if (arr_0.length > arr_1.length || arr_0.length < arr_1.length) {
+            return false;
+        }else {
+            for (uint i=0; i<arr_0.length; i++) {
+                if (arr_0[i] != arr_1[i]) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    // update the cummulative reserve changes from the previous runs during simulation
+    function update_reserves (address[] memory cur_best_route, uint256[][] memory cur_token_ins_outs, address token_in, bool is_reverse) internal {
+        for (uint j=0; j<cur_best_route.length; j++) {
+            if(j == 0) {
+                if (is_reverse) {
+                    update_reserve(cur_best_route[j], token_in, cur_token_ins_outs[j]);
+                } else {
+                    update_reserve(token_in, cur_best_route[j], cur_token_ins_outs[j]);
+                }
+            } else {
+                if (is_reverse) {
+                    update_reserve(cur_best_route[j], cur_best_route[j-1], cur_token_ins_outs[j]);
+                } else {
+                    update_reserve(cur_best_route[j-1], cur_best_route[j], cur_token_ins_outs[j]);
+                }
+                
+            }
+        }
+    }
+
+    // simulate the best route to exchange the token that maximise the profits
+    function simulate(address[] memory avail_token, address token_in, address target_token, uint256 amount, uint256 increase, bool is_reverse) internal {        
+        uint256 runs = amount/increase;
+
+        // split the simulation in multiple runs to find the best route for each run
+        for (uint i=0; i<=runs; i++) {
+            if(i == runs) {
+                if (amount - (increase*runs) <=0 ){
+                    break;
+                }
+                increase = amount - (increase*runs);
+            }
+
+            address[] memory route = new address[](0);
+            uint256[][] memory token_ins_outs = new uint256[][](0);
+            
+            PathInput memory input = PathInput(
+                target_token,
+                token_in,
+                token_in,
+                increase,
+                route,
+                avail_token,
+                token_ins_outs,
+                is_reverse
+            );
+
+            // dfs
+            (address[] memory cur_best_route, uint256[][] memory cur_token_ins_outs, uint256 cur_best_amount) = calculate_best_path(input);
+
+            // increase the token_in and decrease the token_out in the pool reserve
+            update_reserves(cur_best_route, cur_token_ins_outs, token_in, is_reverse);
+            
+            // store/update the best routes so far
+            if (best_routes.length == 0) {
+                address[] storage newRoute = best_routes.push();
+
+                for (uint j = 0; j < cur_best_route.length; j++) {
+                    newRoute.push(cur_best_route[j]);
+                }
+
+                best_amounts.push(cur_best_amount);
+            } else {
+                bool route_found = false;
+
+                for (uint j=0; j<best_routes.length; j++) {
+                    if(array_is_same(best_routes[j], cur_best_route)) {
+                        best_amounts[j] += cur_best_amount;
+                        route_found = true;
+                        break;
+                    }
+                }
+
+                if (!route_found) {
+                    address[] storage newRoute = best_routes.push();
+
+                    for (uint j = 0; j < cur_best_route.length; j++) {
+                        newRoute.push(cur_best_route[j]);
+                    }
+
+                    best_amounts.push(cur_best_amount);
+                }
+            }
+        }
+    }
+
     struct PathInput {
-        address target_token_in;
+        address target_token;
         address token_in;
         address token_out;
-        uint256 amount_out;
+        uint256 amount;
         address[] cur_route;
         address[] avail_token;
+        uint256[][] token_ins_outs;
+        // uint256[] token_outs;
+        bool is_reverse;
+    }
+
+    // update the route of current loop for the next recursive call
+    function copy_route (address[] memory old_route, address next_token) internal returns (address[] memory) {
+        address[] memory new_route = new address[](old_route.length + 1);
+
+        for(uint j = 0; j < old_route.length; j++) {
+            new_route[j] = old_route[j];
+        }
+
+        new_route[old_route.length] = next_token;
+
+        return new_route;
+    }
+
+    // extend the array that store the reserve changes of the current recursive call
+    function copy_token_amount (uint256[][] memory token_ins_outs) internal returns (uint256[][] memory) {
+        uint256[][] memory new_token_ins_outs = new uint256[][](token_ins_outs.length + 1);
+
+        for(uint j = 0; j < token_ins_outs.length; j++) {
+            uint256[] memory ins_outs = new uint256[](token_ins_outs[j].length);
+            
+            for(uint k=0; k<token_ins_outs[j].length; k++) {
+                ins_outs[k] = token_ins_outs[j][k];
+            }
+
+            new_token_ins_outs[j] = ins_outs;
+        }
+
+        uint256[] memory last_ins_outs = new uint256[](2);
+        last_ins_outs[0] = 0;
+        last_ins_outs[1] = 0;
+        new_token_ins_outs[token_ins_outs.length] = last_ins_outs;
+
+        return new_token_ins_outs;
+    }
+
+    // update the array that store the token available for next recursive call
+    function modify_avail_tokens (address[] memory avail_token, uint i) internal returns (address[] memory){
+        address[] memory new_avail_token = new address[](avail_token.length - 1);
+
+        uint idx = 0;
+        
+        for(uint j = 0; j < avail_token.length; j++) {
+            if(j != i){
+                new_avail_token[idx] = avail_token[j];
+                idx++;
+            }
+        }
+
+        return new_avail_token;
     }
 
     // find the minimum amount in by given the amount out and a list of token that can be swapped
-    function calculate_best_path(PathInput memory input) internal view returns (address[] memory, uint256) {
-        uint256 new_amount_in;
-
+    function calculate_best_path(PathInput memory input) internal returns (address[] memory, uint256[][] memory, uint256) {
         if(input.token_in != input.token_out) {
-            // if this is call by this function itself, calculate the amount in for current swap pair
-            new_amount_in = get_swap_in(input.amount_out, input.token_in, input.token_out);
+            // if this is call by this function itself, calculate the amount in or out for current swap pair
+            if (input.is_reverse) {
+                input.amount = get_swap_in(input.amount, input.token_in, input.token_out, true);
+                input.token_ins_outs[input.token_ins_outs.length-1][0] = input.amount;
+            } else {
+                input.amount = get_swap_out(input.amount, input.token_in, input.token_out, true);
+                input.token_ins_outs[input.token_ins_outs.length-1][1] = input.amount;
+            }
 
             // if the token in is the target token, stop here
-            if(input.token_in == input.target_token_in) {
-                return (input.cur_route, new_amount_in);
+            if( (input.is_reverse && input.token_in == input.target_token) ||
+            (!input.is_reverse && input.token_out == input.target_token) ) {
+                return (input.cur_route, input.token_ins_outs, input.amount);
             }
-        } else {
-            // if this is called from the main contract, continue
-            new_amount_in = input.amount_out;
         }
 
         address[] memory best_route;
-        uint256 best_amount_in = 0;
+        uint256[][] memory best_token_ins_outs;
+        uint256 best_amount = 0;
 
         // start dfs, select a token from the available token list and compute the amount in require
         for(uint i = 0; i < input.avail_token.length; i++) {
             // new route
-            address[] memory new_route = new address[](input.cur_route.length + 1);
-            for(uint j = 0; j < input.cur_route.length; j++) {
-                new_route[j] = input.cur_route[j];
-            }
-            new_route[input.cur_route.length] = input.avail_token[i];
+            address[] memory new_route = copy_route(input.cur_route, input.avail_token[i]);
+
+            // new token ins
+            (uint256[][] memory new_token_ins_outs) = copy_token_amount(input.token_ins_outs);
 
             // new available token array
-            address[] memory new_avail_token = new address[](input.avail_token.length - 1);
-            uint idx = 0;
-            for(uint j = 0; j < input.avail_token.length; j++) {
-                if(j != i){
-                    new_avail_token[idx] = input.avail_token[j];
-                    idx++;
-                }
+            address[] memory new_avail_token = modify_avail_tokens(input.avail_token, i);
+
+            PathInput memory nextInput;
+
+            if (input.is_reverse) {
+                new_token_ins_outs[new_token_ins_outs.length-1][0] = 0;
+                new_token_ins_outs[new_token_ins_outs.length-1][1] = input.amount;
+
+                nextInput = PathInput(
+                    input.target_token,
+                    input.avail_token[i],
+                    input.token_in,
+                    input.amount,
+                    new_route,
+                    new_avail_token,
+                    new_token_ins_outs,
+                    input.is_reverse
+                );
+
+            }else {
+                new_token_ins_outs[new_token_ins_outs.length-1][0] = input.amount;
+                new_token_ins_outs[new_token_ins_outs.length-1][1] = 0;
+
+                nextInput = PathInput(
+                    input.target_token,
+                    input.token_out,
+                    input.avail_token[i],
+                    input.amount,
+                    new_route,
+                    new_avail_token,
+                    new_token_ins_outs,
+                    input.is_reverse
+                );
             }
 
             // recursive call
-            PathInput memory nextInput = PathInput(
-                input.target_token_in,
-                input.avail_token[i],
-                input.token_in,
-                new_amount_in,
-                new_route,
-                new_avail_token
-            );
-
-            (address[] memory cur_best_route, uint256 cur_best_amount_in) = calculate_best_path(nextInput);
+            (address[] memory cur_best_route, uint256[][] memory cur_token_ins_outs, uint256 cur_best_amount) = calculate_best_path(nextInput);
 
             // update the route and min amount in
-            if((best_amount_in == 0 && cur_best_amount_in > 0) || (cur_best_amount_in > 0 && cur_best_amount_in < best_amount_in)){
+            if((best_amount == 0 && cur_best_amount > 0) || (input.is_reverse && cur_best_amount > 0 && cur_best_amount < best_amount) ||
+            (!input.is_reverse && cur_best_amount > 0 && cur_best_amount > best_amount)){
                 best_route = cur_best_route;
-                best_amount_in = cur_best_amount_in;
-                console.log(cur_best_amount_in);
-                console.log("best_path: ");
-                for (uint k=0; k<best_route.length; k++) {
-                    if (best_route[k] == USDC) {
-                        console.log("USDC");
-                    } else if (best_route[k] == USDT) {
-                        console.log("USDT");
-                    } else if (best_route[k] == DAI) {
-                        console.log("DAI");
-                    } else if (best_route[k] == WETH) {
-                        console.log("WETH");
-                    } else if (best_route[k] == WBTC) {
-                        console.log("WBTC");
-                    }
-                }
-                console.log();
+                best_token_ins_outs = cur_token_ins_outs;
+                best_amount = cur_best_amount;
             }
         }
 
         // return the best route
-        return (best_route, best_amount_in);
+        return (best_route, best_token_ins_outs, best_amount);
     }
 
-    function get_swap_in(uint256 amount_out, address token_in, address token_out) internal view returns (uint256) {
+    function update_reserve(address token_in, address token_out, uint256[] memory amount_in_out) internal {
+        bool is_found = false;
+        
+        for (uint i=0; i<pairs.length; i++) {
+            if(pairs[i][0] == token_in && pairs[i][1] == token_out) {
+                reserve_changes[i][0] += amount_in_out[0];
+                reserve_changes[i][1] += amount_in_out[1];
+                is_found = true;
+                break;
+            }
+        }
+
+        if (!is_found) {
+            address[] storage new_pair = pairs.push();
+            uint256[] storage new_reserve_change = reserve_changes.push();
+            new_pair.push(token_in);
+            new_pair.push(token_out);
+            new_reserve_change.push(amount_in_out[0]);
+            new_reserve_change.push(amount_in_out[1]);
+        }
+    }
+
+    function calculate_latest_reserve(address token_in, address token_out, uint256 reserve_in, uint256 reserve_out, bool is_reverse) internal view returns (uint256, uint256) {
+        for (uint i=0; i<pairs.length; i++) {
+            if(pairs[i][0] == token_in && pairs[i][1] == token_out) {
+                if (reserve_changes[i][1] > reserve_out) {
+                    reserve_out = 0;
+                } else {
+                    reserve_in += reserve_changes[i][0]; 
+                    reserve_out -= reserve_changes[i][1];
+                }
+
+                return (reserve_in, reserve_out);
+            }
+        }
+
+        return (reserve_in, reserve_out);
+    }
+
+    function get_swap_in(uint256 amount_out, address token_in, address token_out, bool is_simulate) internal view returns (uint256) {
         address token_in_out = uniswap_factory.getPair(token_in, token_out);
         IUniswapV2Pair pair = IUniswapV2Pair(token_in_out);
         uint256 token_in_reserve = 0;
@@ -414,6 +674,11 @@ contract LiquidationOperator is IUniswapV2Callee {
             (token_in_reserve, token_out_reserve,) = pair.getReserves();
         } else {
             (token_out_reserve, token_in_reserve,) = pair.getReserves();
+        }
+
+        if (is_simulate) {
+            // use the latest reverse changes to update the pool reserve
+            (token_in_reserve, token_out_reserve) = calculate_latest_reserve(token_in, token_out, token_in_reserve, token_out_reserve, true);
         }
         
         // if there is not enough token, return 0
@@ -429,7 +694,7 @@ contract LiquidationOperator is IUniswapV2Callee {
         return amount_in;
     }
 
-    function get_swap_out(uint256 amount_in, address token_in, address token_out) internal view returns (uint256 amount_out) {
+    function get_swap_out(uint256 amount_in, address token_in, address token_out, bool is_simulate) internal returns (uint256) {
         address token_in_out = uniswap_factory.getPair(token_in, token_out);
         IUniswapV2Pair pair = IUniswapV2Pair(token_in_out);
         uint256 token_in_reserve = 0;
@@ -441,6 +706,15 @@ contract LiquidationOperator is IUniswapV2Callee {
             (token_in_reserve, token_out_reserve,) = pair.getReserves();
         } else {
             (token_out_reserve, token_in_reserve,) = pair.getReserves();
+        }
+
+        if (is_simulate) {
+            // use the latest reverse changes to update the pool reserve
+            (token_in_reserve, token_out_reserve) = calculate_latest_reserve(token_in, token_out, token_in_reserve, token_out_reserve, false);
+        }
+        
+        if(token_out_reserve <= 0) {
+            return 0;
         }
 
         // calculate the amount_out
@@ -470,30 +744,29 @@ contract LiquidationOperator is IUniswapV2Callee {
     function swap_weth_usdt (uint256 amount_owed, uint256 wbtc_bal) internal {
         // get the pair to do the swap
         // swap WBTC->WETH
-        uint256 weth_swap0 = wbtc_bal - wbtc_minus;
-        uint256 weth_to_recv = get_swap_out(weth_swap0, WBTC, WETH);
-        swap_pair(WBTC, WETH, weth_swap0, weth_to_recv);
+        uint256 to_swap = wbtc_bal;
+        uint256 to_received = 0;
+        address token_in = WBTC;
 
-        uint256 weth_swap1 = wbtc_minus;
-        uint256 usdc_to_recv = get_swap_out(weth_swap1, WBTC, USDC);
-        swap_pair(WBTC, USDC, weth_swap1, usdc_to_recv);
-        uint256 dai_to_recv = get_swap_out(usdc_to_recv, USDC, DAI);
-        swap_pair(USDC, DAI, usdc_to_recv, dai_to_recv);
-        weth_to_recv = get_swap_out(dai_to_recv, DAI, WETH);
-        swap_pair(DAI, WETH, dai_to_recv, weth_to_recv);
+        uint256 weth_to_recv = get_swap_out(wbtc_bal, WBTC, WETH, false);
+        swap_pair(WBTC, WETH, wbtc_bal, weth_to_recv);
 
+        uint256 weth_bal = IERC20(WETH).balanceOf(address(this));
+        console.log("WETH: ", weth_bal);
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
         // start swapping the WETH to USDT 
         uint256 swap0 = amount_owed - minus;
-        uint256 weth_to_swap = get_swap_in(swap0, WETH, USDT);
+        uint256 weth_to_swap = get_swap_in(swap0, WETH, USDT, false);
         swap_pair(WETH, USDT, weth_to_swap, swap0);
+
+        console.log("WETH needed: ", weth_to_swap);
         
         // start swapping the WETH -> USDC -> USDT
         uint256 swap1 = amount_owed - swap0;
-        uint256 usdc_to_swap = get_swap_in(swap1, USDC, USDT);
-        weth_to_swap = get_swap_in(usdc_to_swap, WETH, USDC);
+        uint256 usdc_to_swap = get_swap_in(swap1, USDC, USDT, false);
+        weth_to_swap = get_swap_in(usdc_to_swap, WETH, USDC, false);
         swap_pair(WETH, USDC, weth_to_swap, usdc_to_swap);
         swap_pair(USDC, USDT, usdc_to_swap, swap1);
 
@@ -530,13 +803,12 @@ contract LiquidationOperator is IUniswapV2Callee {
         // 2.2 swap WBTC for other things or repay directly
         //    *** Your code here ***
         // calculate the amount owed (flash loan amount + 0.3%)
-        uint256 amount_owed = debt_to_cover + (debt_to_cover * 3 / 997 + 1);
+        uint256 amount_owed = debt_to_cover * 1000 / 997 + 1;
         console.log("Amount (USDT) Owed: ", amount_owed);
-        console.log("Amount (USDT) Owed: ", amount_owed/10**8);
 
         // get how much WBTC collateral we claimed
         uint256 wbtc_bal = IERC20(WBTC).balanceOf(address(this));
-        console.log("Collateral (WBTC) claimed: ", wbtc_bal/10**8);
+        console.log("Collateral (WBTC) claimed: ", wbtc_bal);
         require(wbtc_bal > 0, "The balance of WBTC is below 0.");
         swap_weth_usdt(amount_owed, wbtc_bal);
 

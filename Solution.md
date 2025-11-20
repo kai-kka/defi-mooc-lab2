@@ -47,3 +47,44 @@ In this case study, the profit (```ETH```) may increase/decrease based on the fo
 1. The tokens' reserve in the swap pool. Due to the [AMM's mechanism](https://blog.uniswap.org/what-is-an-automated-market-maker) used in DeFi, the liquidators can increase their profit by swapping the tokens in the pool where the ```token_in_reserve``` < ```token_out_reserve```. In addition, when the ```token_in``` increase, the price per unit of ```token_out``` decrease. Hence, I believe this is why it is not always the most profitable when the liquidators pay the maximum debt and swap the collateral to other token in the same pool. For example, if the ```debt_to_cover``` is set to the ```USDT``` value (2916358033172) used in the [legitimate liquidation transaction](#liquidation-transaction-analysis), the contract can only receive a profit of 19.40 ```ETH```. However, when the ```debt_to_cover``` is set to 1555555555555 (a magic value generated based on manual testing), the contract can receive a profit of 40.89 ```ETH```. 
 2. Swap fees. Liquidators must account the swap fees (0.3% per swap for UniswapV2) when estimating potential profit. These fees accumulate when the liquidators use multiple swap routes to convert the received collateral into the asset required to repay the flash loan. In this case study, the liquidation yields ```WBTC```, but the flash loan is in ```USDT```. Because the ```USDT``` reserve in the UniswapV2 WBTC/USDT pool is low, the contract cannot swap ```WBTC```->```USDT``` directly. Instead, it swaps ```WBTC```->```WETH``` and ```WETH```->```USDT``` to repay the flash loan. Multi-hop swapping reduces the net liquidation profit because each additional hop increases the total amount of assets required to repay the flash loan.
 2. Gas price. Since this testing script set the gas price to 0, this factor was not considered when maximising the liquidation profit.
+
+top 1: 
+WBTC->WETH->USDC->USDT (773000000000 WETH)
+WBTC->WETH->USDT (2100000000000 WETH)
+48.949526175369707673 ETH
+
+
+WBTC->DAI->USDC->USDT
+WBTC->WETH->USDT (WETH needed: 1509)
+WBTC->WETH->DAI->USDC->USDT
+WBTC->WETH->DAI->USDT (USED for flash loan)
+
+46.902959044914570006 2500000000000, 955555555555
+48.949526175369707673 , 
+48.900214694157913384 2000000000000, 730000000000 0.365
+45.921932624602989423 1555555555555, 455555555555
+
+
+WBTC->WETH = 1529.087211375219375357
+              135.729128358636407552
+               35.168471663730738101
+            38844.042475125777796014
+              485.597921850728859430
+             1002.934913787498312868
+               34.783233231000738357
+             38844042475125777202472
+              492.888789640589887015
+
+              31627836177926837269863
+               1529087211375219375357
+
+flash loan: 2916378221684 USDT
+The WBTC claimed after liquidation call:
+WBTC claimed: 9427338222
+              1000000000, 500000000 (increase in simulation)
+The WETH we can get after WBTC->WETH Uniswapv2
+WETH converted: 1529087211375219375357
+                 500000000000000000000 (increase in simulation)
+USDT owed: 2925153682733
+            300000000000 (increase is reverse simulation)
+DAI/USDT = 997940606417:1
