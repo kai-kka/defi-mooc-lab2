@@ -150,8 +150,9 @@ contract LiquidationOperator is IUniswapV2Callee {
     ILendingPool public i_lending_pool = ILendingPool(0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9);
     // The Uniswap factory
     IUniswapV2Factory public uniswap_factory = IUniswapV2Factory(0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f);
+    IUniswapV2Factory public sushiswap_factory = IUniswapV2Factory(0xC0AEe478e3658e2610c5F7A4A2E1777cE9e4f2Ac);
+    bool is_use_sushi_swap = false;
     
-
     // Tokens used in this liquidation
     address USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
     address WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
@@ -165,21 +166,9 @@ contract LiquidationOperator is IUniswapV2Callee {
     // Target user address and variable
     address target_user = 0x59CE4a2AC5bC3f5F225439B2993b86B42f6d3e9F;
     uint256 debt_to_cover = 2916378221684;
-    uint256 minus = debt_to_cover-1761171047310;
+    uint256 minus = 1125153682733;
+    uint256 minus_wbtc = 0;
 
-    // uint256 minus = 1003000000000;
-    // uint256 wbtc_minus = 100000000;
-    // uint256 debt_to_cover = 2500000000000;
-
-    // uint256 debt_to_cover = 2000000000000; // this will get higher profit (49 ETH)
-    // uint256 minus = 730000000000; // this will get higher profit (49 ETH)
-
-    // uint256 debt_to_cover = 2100000000000;
-    // uint256 minus = 773000000000;
-    // uint256 wbtc_minus = 150000000;
-    
-    // uint256 debt_to_cover = 1555555555555; // 
-    // uint256 debt_to_cover =     600000000000;
     address[][] pairs;
     uint256[][] reserve_changes;
     address[][] best_routes;
@@ -259,60 +248,57 @@ contract LiquidationOperator is IUniswapV2Callee {
         // we should borrow USDT, liquidate the target user and get the WBTC, then swap WBTC to repay uniswap
         // (please feel free to develop other workflows as long as they liquidate the target user successfully)
         //    *** Your code here ***
-        // dfs to find the route that maximise the profit
-        address[] memory avail_token = new address[](4);
-        avail_token[0] = WETH;
-        avail_token[1] = USDC;
-        avail_token[2] = WBTC;
-        avail_token[3] = DAI;
-        // avail_token[4] = PEPE;
-        // avail_token[4] = WISE;
-        // avail_token[3] = PAXG;
-        address[] memory best_route = new address[](0);
+        // // dfs to find the route that maximise the profit
+        // address[] memory avail_token = new address[](4);
+        // avail_token[0] = WETH;
+        // avail_token[1] = USDC;
+        // avail_token[2] = WBTC;
+        // avail_token[3] = DAI;
+        // address[] memory best_route = new address[](0);
 
-        uint256 total = 0;
-        address token_in_sim = USDT;
-        address target_token_sim = WETH;
-        uint256 amount_sim =   2925153682733;
-        uint256 increase_sim =  300000000000;
-        bool is_reverse = true;
+        // uint256 total = 0;
+        // address token_in_sim = USDT;
+        // address target_token_sim = WETH;
+        // uint256 amount_sim =   2925153682733;
+        // uint256 increase_sim =  525153682733;
+        // bool is_reverse = true;
 
-        // calculate best routes to convert WBTC to USDT
-        simulate(avail_token, token_in_sim, target_token_sim, amount_sim, increase_sim, is_reverse);
-        for (uint i=0; i<best_routes.length; i++) {
-            string memory route_str = convert_route_to_string(token_in_sim, best_routes[i], is_reverse);
-            console.log(route_str);
-            console.log(best_amounts[i]);
-            total += best_amounts[i];
-            console.log();
+        // is_use_sushi_swap = false;
+
+        // // calculate best routes to convert WBTC to USDT
+        // simulate(avail_token, token_in_sim, target_token_sim, amount_sim, increase_sim, is_reverse);
+        // for (uint i=0; i<best_routes.length; i++) {
+        //     string memory route_str = convert_route_to_string(token_in_sim, best_routes[i], is_reverse);
+        //     console.log(route_str);
+        //     console.log(best_amounts[i]);
+        //     total += best_amounts[i];
+        //     console.log();
+        // }
+
+        // console.log("Total: ", total);
+        // console.log();
+
+        is_use_sushi_swap = true;
+
+        address flash_in_flash_out;
+        
+        if (is_use_sushi_swap) {
+            flash_in_flash_out = sushiswap_factory.getPair(WETH, USDT);
+        } else {
+            flash_in_flash_out = uniswap_factory.getPair(WETH, USDT);
         }
 
-        console.log("Total: ", total);
-        console.log();
-
-
-        console.log("DAI needed: ", get_swap_in(debt_to_cover, DAI, USDT, false));
-        console.log("WETH needed: ", get_swap_in(2925153682733, WETH, USDT, false));
-        console.log("USDC needed: ", get_swap_in(debt_to_cover, USDC, USDT, false));
-        console.log("WBTC needed: ", get_swap_in(debt_to_cover, WBTC, USDT, false));
-
-        address dai_usdt = uniswap_factory.getPair(DAI, USDT);
-        IUniswapV2Pair dai_usdt_pair = IUniswapV2Pair(dai_usdt);
-        address token0 = dai_usdt_pair.token0();
+        IUniswapV2Pair flash_pair = IUniswapV2Pair(flash_in_flash_out);
         uint256 token_in_reserve = 0;
         uint256 token_out_reserve = 0;
 
-        if(token0 == DAI) {
-            (token_in_reserve, token_out_reserve,) = dai_usdt_pair.getReserves();
-        } else {
-            (token_out_reserve, token_in_reserve,) = dai_usdt_pair.getReserves();
-        }
-
         // call the flash loan here with data size != 0
-        if(token0 == USDT) {
-            dai_usdt_pair.swap(debt_to_cover, 0, address(this), bytes("flash loan"));
+        if(flash_pair.token0() == USDT) {
+            // (token_out_reserve, token_in_reserve,) = flash_pair.getReserves();
+            flash_pair.swap(debt_to_cover, 0, address(this), bytes("flash loan"));
         } else {
-            dai_usdt_pair.swap(0, debt_to_cover, address(this), bytes("flash loan"));
+            // (token_in_reserve, token_out_reserve,) = flash_pair.getReserves();
+            flash_pair.swap(0, debt_to_cover, address(this), bytes("flash loan"));
         }
 
         // 3. Convert the profit into ETH and send back to sender
@@ -663,11 +649,23 @@ contract LiquidationOperator is IUniswapV2Callee {
     }
 
     function get_swap_in(uint256 amount_out, address token_in, address token_out, bool is_simulate) internal view returns (uint256) {
-        address token_in_out = uniswap_factory.getPair(token_in, token_out);
+        address token_in_out; 
+        
+        if(is_use_sushi_swap) {
+            token_in_out = sushiswap_factory.getPair(token_in, token_out);
+        } else {
+            token_in_out = uniswap_factory.getPair(token_in, token_out);
+        }
+
         IUniswapV2Pair pair = IUniswapV2Pair(token_in_out);
         uint256 token_in_reserve = 0;
         uint256 token_out_reserve = 0;
         uint256 amount_in = 0;
+
+        // cannot find the pair
+        if (token_in_out == address(0)) {
+            return 0;
+        }
 
         // get token reserve
         if(pair.token0() == token_in) {
@@ -695,11 +693,23 @@ contract LiquidationOperator is IUniswapV2Callee {
     }
 
     function get_swap_out(uint256 amount_in, address token_in, address token_out, bool is_simulate) internal returns (uint256) {
-        address token_in_out = uniswap_factory.getPair(token_in, token_out);
+        address token_in_out; 
+        
+        if(is_use_sushi_swap) {
+            token_in_out = sushiswap_factory.getPair(token_in, token_out);
+        } else {
+            token_in_out = uniswap_factory.getPair(token_in, token_out);
+        }
+
         IUniswapV2Pair pair = IUniswapV2Pair(token_in_out);
         uint256 token_in_reserve = 0;
         uint256 token_out_reserve = 0;
         uint256 amount_out = 0;
+
+        // cannot find the pair
+        if (token_in_out == address(0)) {
+            return 0;
+        }
 
         // get token reserve
         if(pair.token0() == token_in) {
@@ -726,7 +736,14 @@ contract LiquidationOperator is IUniswapV2Callee {
     }
 
     function swap_pair (address token_in, address token_out, uint256 amount_in, uint256 amount_out) internal {
-        address token_in_token_out = uniswap_factory.getPair(token_in, token_out);
+        address token_in_token_out; 
+        
+        if(is_use_sushi_swap) {
+            token_in_token_out = sushiswap_factory.getPair(token_in, token_out);
+        } else {
+            token_in_token_out = uniswap_factory.getPair(token_in, token_out);
+        }
+
         IUniswapV2Pair pair = IUniswapV2Pair(token_in_token_out);
 
         // transfer token_in to the swap pool
@@ -741,36 +758,40 @@ contract LiquidationOperator is IUniswapV2Callee {
     }
 
     // swap WBTC->WETH->USDT
-    function swap_weth_usdt (uint256 amount_owed, uint256 wbtc_bal) internal {
+    function swap_weth (uint256 amount_owed, uint256 wbtc_bal) internal {
         // get the pair to do the swap
         // swap WBTC->WETH
         uint256 to_swap = wbtc_bal;
         uint256 to_received = 0;
         address token_in = WBTC;
 
-        uint256 weth_to_recv = get_swap_out(wbtc_bal, WBTC, WETH, false);
-        swap_pair(WBTC, WETH, wbtc_bal, weth_to_recv);
+        uint256 weth_to_recv = get_swap_out(wbtc_bal-minus_wbtc, WBTC, WETH, false);
+        swap_pair(WBTC, WETH, wbtc_bal-minus_wbtc, weth_to_recv);
 
+        if (minus_wbtc > 0) {
+            is_use_sushi_swap = false;
+            weth_to_recv = get_swap_out(minus_wbtc, WBTC, WETH, false);
+            swap_pair(WBTC, WETH, minus_wbtc, weth_to_recv);
+        }
+       
         uint256 weth_bal = IERC20(WETH).balanceOf(address(this));
         console.log("WETH: ", weth_bal);
 
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        // start swapping the WETH to USDT 
+        // start swapping the WETH to USDT using uniswap
+        // route WETH->USDT
+        is_use_sushi_swap = false;
         uint256 swap0 = amount_owed - minus;
         uint256 weth_to_swap = get_swap_in(swap0, WETH, USDT, false);
         swap_pair(WETH, USDT, weth_to_swap, swap0);
 
-        console.log("WETH needed: ", weth_to_swap);
+        if (minus > 0) {
+            // route WETH->USDC->USDT
+            uint256 usdc_to_swap = get_swap_in(minus, USDC, USDT, false);
+            weth_to_swap =  get_swap_in(usdc_to_swap, WETH, USDC, false);
+            swap_pair(WETH, USDC, weth_to_swap, usdc_to_swap);
+            swap_pair(USDC, USDT, usdc_to_swap, minus);
+        }
         
-        // start swapping the WETH -> USDC -> USDT
-        uint256 swap1 = amount_owed - swap0;
-        uint256 usdc_to_swap = get_swap_in(swap1, USDC, USDT, false);
-        weth_to_swap = get_swap_in(usdc_to_swap, WETH, USDC, false);
-        swap_pair(WETH, USDC, weth_to_swap, usdc_to_swap);
-        swap_pair(USDC, USDT, usdc_to_swap, swap1);
-
-        console.log("WETH needed: ", weth_to_swap);
     }
 
     // required by the swap
@@ -810,12 +831,19 @@ contract LiquidationOperator is IUniswapV2Callee {
         uint256 wbtc_bal = IERC20(WBTC).balanceOf(address(this));
         console.log("Collateral (WBTC) claimed: ", wbtc_bal);
         require(wbtc_bal > 0, "The balance of WBTC is below 0.");
-        swap_weth_usdt(amount_owed, wbtc_bal);
+
+        // swap WBTC to WETH
+        swap_weth(amount_owed, wbtc_bal);
+
+        // calculate amount owed in WETH, since we are using WETH/USDT flash swap
+        // uint256 weth_amount_owed = get_swap_in(amount_owed, WETH, USDT, false);
+        // console.log(weth_amount_owed);
 
         // 2.3 repay
         //    *** Your code here ***
         // repay the flash loan
         IERC20(USDT).safeTransfer(msg.sender, amount_owed);
+        // IERC20(WETH).safeTransfer(msg.sender, weth_amount_owed);
         
         // END TODO
     }
